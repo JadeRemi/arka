@@ -1,3 +1,4 @@
+import { INPUT } from "../../config/feel";
 import { DESIGN_W } from "../../core/Viewport";
 import { BONE, STEEL } from "../../render/palette";
 import { drawText } from "../../render/text";
@@ -13,6 +14,8 @@ export interface Settings {
   vignette: boolean;
   shake: boolean;
   ditherStrength: number;
+  /** Capture the mouse during play, so the cursor cannot leave the window and freeze steering. */
+  mouseLock: boolean;
 }
 
 export const defaultSettings = (): Settings => ({
@@ -21,9 +24,10 @@ export const defaultSettings = (): Settings => ({
   vignette: true,
   shake: true,
   ditherStrength: 1,
+  mouseLock: INPUT.mouseLock,
 });
 
-const PANEL = { x: DESIGN_W * 0.5 - 260, y: 132, w: 520, h: 424 };
+const PANEL = { x: DESIGN_W * 0.5 - 260, y: 118, w: 520, h: 476 };
 
 export function buildOptions(tree: WidgetTree, settings: Settings, onBack: () => void): void {
   tree.clear();
@@ -50,7 +54,11 @@ export function buildOptions(tree: WidgetTree, settings: Settings, onBack: () =>
 
   const dither = tree.add(new Slider(x, y, w, 34, "dither strength", settings.ditherStrength, 8));
   dither.onChange = (v) => (settings.ditherStrength = v);
-  y += gap + 18;
+  y += gap;
+
+  const lock = tree.add(new Toggle(x, y, w, 34, "capture mouse", settings.mouseLock));
+  lock.onChange = (v) => (settings.mouseLock = v);
+  y += gap + 14;
 
   const back = tree.add(new Button(DESIGN_W * 0.5 - 90, y, 180, 48, "back", "neutral"));
   back.onPress = onBack;
@@ -58,7 +66,7 @@ export function buildOptions(tree: WidgetTree, settings: Settings, onBack: () =>
 
 export function drawOptions(ctx: CanvasRenderingContext2D): void {
   drawPanel(ctx, PANEL.x, PANEL.y, PANEL.w, PANEL.h, "options");
-  drawText(ctx, "display", PANEL.x + 44, PANEL.y + 30, {
+  drawText(ctx, "display  ·  input", PANEL.x + 44, PANEL.y + 30, {
     size: 12,
     color: STEEL[3],
     tracking: 0.44,

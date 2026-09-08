@@ -136,6 +136,16 @@ export const FX = {
   sparkCap: 800,
 } as const;
 
+export const INPUT = {
+  /**
+   * Multiplier on locked-pointer movement. 1 matches unlocked mouse travel exactly, which is
+   * what makes the lock unnoticeable when it engages.
+   */
+  mouseSensitivity: 1,
+  /** Capture the mouse during play so the cursor cannot leave the window and freeze steering. */
+  mouseLock: true,
+} as const;
+
 export const PACING = {
   /** Seconds the level-intro card holds before the ball can be launched. */
   levelIntro: 2.3,

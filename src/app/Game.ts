@@ -31,6 +31,7 @@ import {
   drawLaunchPrompt,
   drawLevelClear,
   drawLifeLost,
+  drawLockPrompt,
   drawPause,
 } from "../ui/screens/Overlays";
 import type { LevelBreakdown } from "../game/Score";
@@ -118,6 +119,9 @@ export class Game implements LoopHandlers {
   private applyState(state: State): void {
     this.previousState = this.state;
     this.state = state;
+    // Every state other than play needs a real cursor to aim with, so the lock is dropped on
+    // the way out rather than per-screen.
+    if (state !== "playing") this.input.releaseLock();
     switch (state) {
       case "title":
         this.enterTitle();
@@ -127,6 +131,7 @@ export class Game implements LoopHandlers {
         break;
       case "playing":
         this.tree.clear();
+        this.updateMouseLock();
         break;
       case "paused":
         buildPause(
@@ -206,6 +211,12 @@ export class Game implements LoopHandlers {
     this.syncPointer();
     this.handleKeys();
 
+    // Losing the lock mid-rally means the player pressed Escape or the window lost focus.
+    // Pausing is the only sane response: the alternative is a live ball and a frozen paddle.
+    if (this.input.lockLost && this.state === "playing" && !this.pendingState) {
+      this.go("paused");
+    }
+
     const uiActive = this.state !== "playing";
     if (uiActive) this.tree.update(this.pointer, dt, this.keyboardFocus);
 
@@ -216,6 +227,8 @@ export class Game implements LoopHandlers {
 
     if (this.introT > 0) this.introT = Math.max(0, this.introT - dt);
 
+    if (this.state === "playing") this.updateMouseLock();
+
     if (this.state === "playing" || this.state === "levelClear") {
       const pointerX = this.input.pointerActive ? this.input.pointerX : undefined;
       const axis = this.input.axisX();
@@ -224,6 +237,10 @@ export class Game implements LoopHandlers {
       this.background.update(dt, this.world.ball.pos.x);
       this.hud.update(this.world, dt);
       this.drainWorldEvents();
+
+      // Pin the virtual cursor to the paddle so the two cannot drift apart at the field edges.
+      const paddle = this.world.paddle;
+      this.input.syncLockedPointer(paddle.targetX, paddle.minX, paddle.maxX);
     }
 
     if (this.state === "levelClear") this.revealT = clamp01(this.revealT + dt * 0.9);
@@ -275,6 +292,9 @@ export class Game implements LoopHandlers {
         if (input.wasPressed(" ") || (this.pointer.pressed && !onPauseButton)) {
           this.world.launch();
         }
+        // A click carries the transient user activation the lock request needs, so an earlier
+        // refusal (from starting the level with the keyboard) recovers here.
+        if (this.pointer.pressed && !onPauseButton) this.updateMouseLock();
         break;
       }
 
@@ -292,6 +312,16 @@ export class Game implements LoopHandlers {
         if (input.wasPressed("Escape")) this.go("title");
         break;
     }
+  }
+
+  /** Holds the lock while playing with a mouse, if the player has not turned it off. */
+  private updateMouseLock(): void {
+    if (this.state !== "playing" || this.input.touchMode || !this.settings.mouseLock) {
+      if (this.input.locked) this.input.releaseLock();
+      return;
+    }
+    const paddle = this.world.paddle;
+    this.input.requestLock(paddle.minX, paddle.maxX);
   }
 
   private drainWorldEvents(): void {
@@ -390,6 +420,14 @@ export class Game implements LoopHandlers {
         ) {
           drawLaunchPrompt(ctx, this.time, this.input.touchMode);
         }
+        if (
+          this.settings.mouseLock &&
+          !this.input.touchMode &&
+          !this.input.locked &&
+          this.introT <= 0
+        ) {
+          drawLockPrompt(ctx, this.time);
+        }
         if (this.lifeLostFlash > 0 && this.world.lives > 0) {
           ctx.save();
           ctx.globalAlpha = Math.min(1, this.lifeLostFlash);
@@ -424,6 +462,10 @@ export class Game implements LoopHandlers {
     }
 
     if (this.profiler.visible) this.drawProfiler(ctx);
+
+    // The cursor is only hidden during play. Hiding it everywhere left the menus with no
+    // visible pointer at all, which made them guesswork with a mouse.
+    this.viewport.canvas.classList.toggle("in-play", this.state === "playing");
 
     // Blit the design-space frame to the real canvas.
     this.viewport.begin();
@@ -512,6 +554,7 @@ export class Game implements LoopHandlers {
 
   dispose(): void {
     this.disposed = true;
+    this.input.releaseLock();
     this.post.dispose();
     this.tree.clear();
   }

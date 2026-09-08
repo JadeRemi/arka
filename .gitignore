@@ -34,6 +34,9 @@ yarn-error.log*
 *.swp
 *.swo
 
+# local design docs — kept on disk, deliberately not published
+docs/
+
 # OS junk
 .DS_Store
 .DS_Store?

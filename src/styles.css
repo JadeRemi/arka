@@ -25,14 +25,20 @@ body {
      browser's address bar slides in and out, which vh does not. */
   height: 100vh;
   height: 100dvh;
-  cursor: none;
   outline: none;
+  /* Menus need a visible pointer to aim with; only gameplay hides it. */
+  cursor: default;
+}
+
+#stage.in-play {
+  cursor: none;
 }
 
 /* A finger is the cursor on touch devices, so hiding the pointer there is pointless and
    dragging must never be interpreted as a text selection or a page scroll. */
 @media (pointer: coarse) {
-  #stage {
+  #stage,
+  #stage.in-play {
     cursor: auto;
   }
 }

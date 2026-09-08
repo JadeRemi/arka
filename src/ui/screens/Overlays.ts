@@ -211,6 +211,21 @@ export function drawLaunchPrompt(
   });
 }
 
+/**
+ * Shown when the mouse is not captured. Pointer lock needs a click to engage, so this is the
+ * one piece of UI that has to tell the player something before the game can steer reliably.
+ */
+export function drawLockPrompt(ctx: CanvasRenderingContext2D, time: number): void {
+  drawText(ctx, "click to capture the mouse", DESIGN_W * 0.5, DESIGN_H - 96, {
+    size: 12,
+    color: STEEL[3],
+    align: "center",
+    tracking: 0.36,
+    weight: "light",
+    alpha: 0.5 + 0.3 * Math.sin(time * 3),
+  });
+}
+
 export function drawLifeLost(ctx: CanvasRenderingContext2D, lives: number): void {
   drawText(ctx, lives === 1 ? "last ball" : `${lives} balls left`, DESIGN_W * 0.5, 320, {
     size: 30,

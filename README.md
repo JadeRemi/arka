@@ -45,7 +45,7 @@ Then open <http://localhost:8080>.
 
 | Input | Action |
 |---|---|
-| Mouse / trackpad | Move the paddle |
+| Mouse / trackpad | Move the paddle. The mouse is captured during play, so it cannot leave the window and lose control of the paddle — click once in the field if the game asks. `Esc` releases it and pauses. Turn it off with **capture mouse** in Options |
 | `←` `→` or `A` `D` | Move the paddle |
 | `Space` / click | Launch the ball |
 | `Esc` / `P` | Pause |
@@ -72,5 +72,5 @@ No gameplay code hard-codes these values.
 
 ## Docs
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how it works and why
-- [docs/ROADMAP.md](docs/ROADMAP.md) — build order
+`docs/ARCHITECTURE.md` (how it works and why) and `docs/ROADMAP.md` (build order) are kept
+locally and are not published — `docs/` is gitignored.
