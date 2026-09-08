@@ -69,8 +69,3 @@ Every number that decides how the game feels, and both content registries, live 
 | [powerups.ts](src/config/powerups.ts) | add or rebalance a power-up — one table row; set `weight: 0` to disable one |
 
 No gameplay code hard-codes these values.
-
-## Docs
-
-`docs/ARCHITECTURE.md` (how it works and why) and `docs/ROADMAP.md` (build order) are kept
-locally and are not published — `docs/` is gitignored.
