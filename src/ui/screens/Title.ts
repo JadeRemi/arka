@@ -22,7 +22,12 @@ export function buildTitle(tree: WidgetTree, actions: TitleActions): void {
   options.onPress = () => actions.onOptions();
 }
 
-export function drawTitle(ctx: CanvasRenderingContext2D, time: number, best: number): void {
+export function drawTitle(
+  ctx: CanvasRenderingContext2D,
+  time: number,
+  best: number,
+  touch = false,
+): void {
   const cx = DESIGN_W * 0.5;
 
   // Wordmark: oversized dithered display type with a hard shadow and a scan sweep.
@@ -43,11 +48,13 @@ export function drawTitle(ctx: CanvasRenderingContext2D, time: number, best: num
     align: "center",
     tracking: 0.3,
     shadow: { dx: 0.035, dy: 0.05, color: VOID[0] },
-    glow: { color: NEON[1], width: 0.06, alpha: 0.5 },
+    // Faint on purpose: at 0.5 the glow spilled over the tagline directly beneath and made
+    // it unreadable.
+    glow: { color: NEON[1], width: 0.03, alpha: 0.28 },
     dither: { a: NEON[0], b: BONE[2], t: 0.62 + 0.18 * Math.sin(time * 1.4) },
   });
 
-  drawText(ctx, "a canvas arkanoid", cx, 300, {
+  drawText(ctx, "a canvas arkanoid", cx, 318, {
     size: 17,
     color: STEEL[3],
     align: "center",
@@ -59,10 +66,10 @@ export function drawTitle(ctx: CanvasRenderingContext2D, time: number, best: num
   ctx.save();
   ctx.globalAlpha = 0.5;
   setDitherFill(ctx, VOID[0], STEEL[2], 0.6);
-  ctx.fillRect(cx - 180, 336, 360, 2);
+  ctx.fillRect(cx - 180, 348, 360, 2);
   ctx.restore();
 
-  drawText(ctx, "procedural levels", cx, 356, {
+  drawText(ctx, "procedural levels", cx, 366, {
     size: 12,
     color: withAlpha(NEON[0], 0.75),
     align: "center",
@@ -80,7 +87,10 @@ export function drawTitle(ctx: CanvasRenderingContext2D, time: number, best: num
     });
   }
 
-  drawText(ctx, "mouse or arrows to move  ·  space to launch  ·  esc to pause", cx, DESIGN_H - 62, {
+  const hint = touch
+    ? "drag to move  ·  tap to launch"
+    : "mouse or arrows to move  ·  space to launch  ·  esc to pause";
+  drawText(ctx, hint, cx, DESIGN_H - 62, {
     size: 11,
     color: STEEL[2],
     align: "center",

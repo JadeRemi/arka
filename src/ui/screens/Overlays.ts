@@ -196,8 +196,12 @@ export function drawGameOver(
   });
 }
 
-export function drawLaunchPrompt(ctx: CanvasRenderingContext2D, time: number): void {
-  drawText(ctx, "space to launch", DESIGN_W * 0.5, DESIGN_H - 122, {
+export function drawLaunchPrompt(
+  ctx: CanvasRenderingContext2D,
+  time: number,
+  touch = false,
+): void {
+  drawText(ctx, touch ? "tap to launch" : "space to launch", DESIGN_W * 0.5, DESIGN_H - 122, {
     size: 14,
     color: BONE[1],
     align: "center",

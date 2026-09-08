@@ -1,5 +1,4 @@
 import type { Aabb } from "../math/aabb";
-import { contains } from "../math/aabb";
 
 export type WidgetState = "idle" | "hover" | "active" | "disabled";
 
@@ -26,6 +25,12 @@ export abstract class Widget {
   hoverBlend = 0;
   pressBlend = 0;
   onPress: (() => void) | undefined;
+  /**
+   * Extra pixels added to the hit area only. Set for touch input: a control sized for a
+   * cursor is not reliably hittable with a fingertip, and growing the drawn shape instead
+   * would change the layout.
+   */
+  hitPadding = 0;
 
   constructor(x: number, y: number, w: number, h: number) {
     this.rect.x = x;
@@ -43,7 +48,7 @@ export abstract class Widget {
 
   /** Returns true if this widget consumed the pointer press. */
   update(pointer: PointerState, focused: boolean, dt: number): boolean {
-    const inside = this.enabled && contains(this.rect, pointer.x, pointer.y);
+    const inside = this.enabled && this.hits(pointer.x, pointer.y);
     this.hovered = inside || (focused && this.enabled);
 
     let consumed = false;
@@ -61,6 +66,13 @@ export abstract class Widget {
     this.hoverBlend += ((this.hovered ? 1 : 0) - this.hoverBlend) * rate;
     this.pressBlend += ((this.held ? 1 : 0) - this.pressBlend) * Math.min(1, dt * 24);
     return consumed;
+  }
+
+  /** Hit test against the rect grown by `hitPadding`. */
+  hits(px: number, py: number): boolean {
+    const p = this.hitPadding;
+    const r = this.rect;
+    return px >= r.x - p && px <= r.x + r.w + p && py >= r.y - p && py <= r.y + r.h + p;
   }
 
   fire(): void {
@@ -108,6 +120,11 @@ export class WidgetTree {
 
   activateFocused(): void {
     this.focused?.fire();
+  }
+
+  /** Applies a touch-sized hit margin to every widget in the tree. */
+  setHitPadding(padding: number): void {
+    for (const w of this.widgets) w.hitPadding = padding;
   }
 
   update(pointer: PointerState, dt: number, keyboardFocus: boolean): void {

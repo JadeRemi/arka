@@ -70,6 +70,18 @@ export class Score {
     return points;
   }
 
+  /**
+   * Points that are not part of the brick chain — catching a capsule, for instance. Scaled by
+   * the level but deliberately outside the combo, which belongs to bricks alone.
+   */
+  awardFlat(base: number): number {
+    if (base <= 0) return 0;
+    const points = Math.round(base * this.levelMultiplier);
+    this.total += points;
+    this.levelBricks += points;
+    return points;
+  }
+
   /** Called on every paddle contact — this is what makes the combo a risk/reward decision. */
   breakCombo(): void {
     this.combo = 0;

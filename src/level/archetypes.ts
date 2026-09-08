@@ -13,6 +13,26 @@ export const ARCHETYPES: readonly ArchetypeId[] = [
   "sentinel",
 ];
 
+/**
+ * Display names for the level-intro card. The generator ids are mechanical; these are what the
+ * player is told, and they should describe the shape they are about to face.
+ */
+export const ARCHETYPE_LABELS: Readonly<Record<ArchetypeId, string>> = {
+  mirror: "mirrored",
+  rings: "concentric",
+  automaton: "overgrowth",
+  lattice: "lattice",
+  sentinel: "sentinel",
+};
+
+export const ARCHETYPE_BLURBS: Readonly<Record<ArchetypeId, string>> = {
+  mirror: "symmetrical wall",
+  rings: "nested shells",
+  automaton: "organic mass",
+  lattice: "woven diagonals",
+  sentinel: "shielded core",
+};
+
 export function makeMask(rows: number): Mask {
   return new Uint8Array(GRID_COLS * rows);
 }

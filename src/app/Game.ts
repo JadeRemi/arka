@@ -1,3 +1,4 @@
+import { PACING } from "../config/feel";
 import { silentAudio, type Audio } from "../core/Audio";
 import type { Input } from "../core/Input";
 import type { LoopHandlers } from "../core/Loop";
@@ -12,12 +13,16 @@ import { Post, type PostOptions } from "../render/Post";
 import { drawBrick } from "../render/painters/bricks";
 import { drawBall, drawField, drawPaddle } from "../render/painters/entities";
 import { drawDust, drawPops, drawRings, drawShards, drawSparks } from "../render/painters/effects";
+import { drawDrops } from "../render/painters/drops";
 import { BONE, EMBER, STEEL, VOID, withAlpha } from "../render/palette";
 import { drawText } from "../render/text";
 import { Hud } from "../ui/Hud";
 import { WidgetTree, type PointerState } from "../ui/Widget";
 import { buildOptions, defaultSettings, drawOptions, type Settings } from "../ui/screens/Options";
 import { buildTitle, drawTitle } from "../ui/screens/Title";
+import { drawLevelIntro } from "../ui/screens/LevelIntro";
+import { drawRotateHint } from "../ui/screens/RotateHint";
+import { IconButton } from "../ui/widgets/IconButton";
 import {
   buildGameOver,
   buildLevelClear,
@@ -32,7 +37,9 @@ import type { LevelBreakdown } from "../game/Score";
 
 type State = "title" | "options" | "playing" | "paused" | "levelClear" | "gameOver";
 
-const TRANSITION = 0.42;
+const TRANSITION = PACING.transition;
+/** Hit margin added to every widget while touch input is in use. */
+const TOUCH_HIT_PADDING = 14;
 
 /**
  * Top-level state machine. Owns the single update path and the single draw path: `update` is
@@ -47,6 +54,9 @@ export class Game implements LoopHandlers {
   private readonly post = new Post();
   private readonly hud = new Hud();
   private readonly tree = new WidgetTree();
+  /** Always-on touch controls, dispatched separately from the per-screen tree. */
+  private readonly touchTree = new WidgetTree();
+  private touchPause: IconButton | undefined;
   private readonly profiler = new Profiler();
   private readonly settings: Settings = defaultSettings();
   private readonly audio: Audio = silentAudio;
@@ -72,6 +82,8 @@ export class Game implements LoopHandlers {
   private bestScore = 0;
   private keyboardFocus = false;
   private disposed = false;
+  private introSpec: LevelSpec | undefined;
+  private introT = 0;
 
   constructor(
     private readonly viewport: Viewport,
@@ -83,6 +95,13 @@ export class Game implements LoopHandlers {
     const ctx = c.getContext("2d", { alpha: false });
     if (!ctx) throw new Error("Game: 2D context unavailable");
     this.frame = ctx;
+
+    this.touchPause = this.touchTree.add(new IconButton(DESIGN_W - 74, 14, 54, "pause"));
+    this.touchPause.focusable = false;
+    this.touchPause.onPress = () => {
+      if (this.state === "playing") this.go("paused");
+    };
+    this.touchTree.setHitPadding(TOUCH_HIT_PADDING);
 
     this.runSeed = (Math.random() * 0xffffffff) >>> 0;
     this.background.build(this.runSeed);
@@ -148,6 +167,7 @@ export class Game implements LoopHandlers {
     this.background.build(this.levelSpec.backdropSeed);
     this.hud.reset();
     this.breakdown = undefined;
+    this.beginIntro();
     this.go("playing");
   }
 
@@ -156,7 +176,13 @@ export class Game implements LoopHandlers {
     this.levelSpec = generateLevel(level, this.runSeed);
     this.world.loadLevel(level, this.runSeed, this.levelSpec);
     this.background.build(this.levelSpec.backdropSeed);
+    this.beginIntro();
     this.go("playing");
+  }
+
+  private beginIntro(): void {
+    this.introSpec = this.levelSpec;
+    this.introT = PACING.levelIntro;
   }
 
   // ---- update -----------------------------------------------------------------------------
@@ -182,6 +208,13 @@ export class Game implements LoopHandlers {
 
     const uiActive = this.state !== "playing";
     if (uiActive) this.tree.update(this.pointer, dt, this.keyboardFocus);
+
+    // The touch pause button lives outside the per-screen tree so it survives state changes,
+    // and it swallows the press that would otherwise launch the ball.
+    const touchVisible = this.input.touchMode && this.state === "playing";
+    if (touchVisible) this.touchTree.update(this.pointer, dt, false);
+
+    if (this.introT > 0) this.introT = Math.max(0, this.introT - dt);
 
     if (this.state === "playing" || this.state === "levelClear") {
       const pointerX = this.input.pointerActive ? this.input.pointerX : undefined;
@@ -233,10 +266,17 @@ export class Game implements LoopHandlers {
         if (input.wasPressed("Escape")) this.go(this.previousState === "paused" ? "paused" : "title");
         break;
 
-      case "playing":
+      case "playing": {
         if (input.wasPressed("Escape", "p")) this.go("paused");
-        if (input.wasPressed(" ") || this.pointer.pressed) this.world.launch();
+        const onPauseButton =
+          this.input.touchMode &&
+          this.touchPause !== undefined &&
+          this.touchPause.hits(this.pointer.x, this.pointer.y);
+        if (input.wasPressed(" ") || (this.pointer.pressed && !onPauseButton)) {
+          this.world.launch();
+        }
         break;
+      }
 
       case "paused":
         if (input.wasPressed("Escape", "p")) this.go("playing");
@@ -310,7 +350,7 @@ export class Game implements LoopHandlers {
 
     switch (this.state) {
       case "title":
-        drawTitle(ctx, this.time, this.bestScore);
+        drawTitle(ctx, this.time, this.bestScore, this.input.touchMode);
         break;
       case "options":
         drawOptions(ctx);
@@ -340,8 +380,15 @@ export class Game implements LoopHandlers {
         );
         break;
       case "playing":
-        if (this.world.ball.docked && this.world.respawnDelay <= 0) {
-          drawLaunchPrompt(ctx, this.time);
+        if (this.introSpec && this.introT > 0) {
+          drawLevelIntro(ctx, this.introSpec, 1 - this.introT / PACING.levelIntro);
+        }
+        if (
+          this.world.allDocked &&
+          this.world.respawnDelay <= 0 &&
+          this.world.introDelay <= 0
+        ) {
+          drawLaunchPrompt(ctx, this.time, this.input.touchMode);
         }
         if (this.lifeLostFlash > 0 && this.world.lives > 0) {
           ctx.save();
@@ -353,6 +400,9 @@ export class Game implements LoopHandlers {
     }
 
     this.tree.draw(ctx, this.time, this.keyboardFocus);
+    if (this.input.touchMode && this.state === "playing") {
+      this.touchTree.draw(ctx, this.time, false);
+    }
 
     const options: PostOptions = {
       bloom: this.settings.bloom,
@@ -367,6 +417,12 @@ export class Game implements LoopHandlers {
       Post.wipe(ctx, t);
     }
 
+    // A portrait touch device would letterbox the 16:9 field into an unplayable strip, so it
+    // gets a rotate prompt over the top of everything instead.
+    if (this.input.touchMode && this.viewport.deviceH > this.viewport.deviceW) {
+      drawRotateHint(ctx, this.time);
+    }
+
     if (this.profiler.visible) this.drawProfiler(ctx);
 
     // Blit the design-space frame to the real canvas.
@@ -376,7 +432,6 @@ export class Game implements LoopHandlers {
 
   private drawWorld(ctx: CanvasRenderingContext2D, alpha: number): void {
     const world = this.world;
-    const ball = world.ball;
 
     ctx.save();
     if (this.settings.shake) ctx.translate(world.shake.offsetX, world.shake.offsetY);
@@ -392,19 +447,20 @@ export class Game implements LoopHandlers {
 
     drawPaddle(ctx, world.paddle, this.time);
 
-    // Interpolate the ball between its previous and current step positions.
-    const ix = ball.prev.x + (ball.pos.x - ball.prev.x) * alpha;
-    const iy = ball.prev.y + (ball.pos.y - ball.prev.y) * alpha;
-    const realX = ball.pos.x;
-    const realY = ball.pos.y;
-    if (!ball.docked) {
-      ball.pos.x = ix;
-      ball.pos.y = iy;
+    // Interpolate each ball between its previous and current step positions.
+    for (const b of world.balls) {
+      const realX = b.pos.x;
+      const realY = b.pos.y;
+      if (!b.docked) {
+        b.pos.x = b.prev.x + (realX - b.prev.x) * alpha;
+        b.pos.y = b.prev.y + (realY - b.prev.y) * alpha;
+      }
+      drawBall(ctx, b, this.time);
+      b.pos.x = realX;
+      b.pos.y = realY;
     }
-    drawBall(ctx, ball, this.time);
-    ball.pos.x = realX;
-    ball.pos.y = realY;
 
+    drawDrops(ctx, world.drops);
     drawPops(ctx, world.pops);
     ctx.restore();
 

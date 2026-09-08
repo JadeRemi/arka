@@ -123,8 +123,8 @@ Definition of done for every phase: `yarn typecheck`, `yarn lint` and `yarn test
 |---|---|
 | Sound | `core/Audio` is an interface with a no-op implementation; adding it later touches one file |
 | Save / persistence | The brief rules it out. No `localStorage`, no server |
-| Power-ups | Not in the brief. The `Brick.onBreak` hook is where they would attach |
-| Mobile touch layout | Pointer input already works; a touch-sized layout is not designed |
+| Laser paddle | Would need a projectile system; the power-up registry has room for it |
+| Portrait layout | Portrait shows a rotate prompt rather than a reflowed field |
 
 ---
 
@@ -154,3 +154,36 @@ still open is listed below.
 - [ ] Docker image build and serve check.
 - [ ] Tuning pass on feel: paddle width curve, speed ramp, and how quickly the exotic brick
       budget ramps in.
+
+
+---
+
+## Phase 11 — Feel, power-ups, presentation, touch
+
+- [x] Move every tunable number into `src/config/feel.ts`; no gameplay file hard-codes one
+- [x] `config/blocks.ts` — the block registry, so a new type is one table row plus a painter case
+- [x] `config/powerups.ts` — the power-up registry, with effects declared as data
+- [x] Retune the curves: `√(level−1)` for ball speed and paddle width, gentler rally ramp,
+      rally cool-down so a hot exchange relaxes instead of staying fast
+- [x] Derive brick cell height from the field, so the wall fills a real share of the playfield
+      instead of a thin strip (level 1 ≈ 37%, level 12 ≈ 64%)
+- [x] `game/Drops.ts` — falling capsules, pooled, with sway and a real hitbox
+- [x] `game/Effects.ts` — active-effect state, modifiers multiplied, refresh-not-stack,
+      opposites cancel
+- [x] Multiple balls: pooled ball list, per-ball sweep, a life spent only when the list empties
+- [x] Nine power-ups: expand, narrow, slow, fast, disrupt, catch, breaker, extra life, guard
+- [x] `render/painters/drops.ts` — capsule art, with hazards pulsing
+- [x] HUD: explicit three-row layout, power-up chips that drain and flash, guard floor line
+- [x] `ui/screens/LevelIntro.ts` — the archetype card at the top of every level
+- [x] Touch: window-level drag tracking, 14 px widget hit margins, on-screen pause control,
+      portrait rotate prompt, mobile viewport and `dvh` sizing
+- [x] Tests: `Effects.test.ts`, `tuning.test.ts`, and the power-up path in `World.test.ts`
+- [x] Verified in a real browser: intro card, capsules, multiball, effect chips, a late level
+      with a tall wall and visible steel / mirror / explosive / glass variety
+
+### Open
+
+- [ ] Frame-time measurement on real hardware with post on — still a budget, not a measurement
+- [ ] A pass on a real phone: thumb reach, capsule size at that scale, pause-button placement
+- [ ] A 10-minute soak to confirm the caches stay flat
+- [ ] Docker image build and serve check

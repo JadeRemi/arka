@@ -24,11 +24,15 @@ menus, buttons and every glyph of text — is drawn by our own code into the can
 | Score system | Base × type × combo × level, in-memory only |
 | No sounds yet | An `Audio` seam exists as an interface with a no-op implementation, so adding sound later touches one file |
 | No save system | No `localStorage`, no server, no persistence of any kind |
+| Easily configurable | Every tunable number and both content registries live in `src/config/` (§2.1); gameplay code hard-codes nothing |
+| Power-ups | Nine falling capsules, declared as data (§6.1) |
+| Touch | Drag anywhere to steer, tap to launch, an on-screen pause control, and a rotate prompt in portrait (§9.1) |
 
-**Assumptions we had to make** (the brief said "different types of blocks … etc." without
-naming them): the seven block behaviours in §6, the seven-colour palette in §3, and the level
-archetypes in §7 are our choice. They are the parts of the spec that were left open; everything
-else follows the brief literally.
+**Assumptions we had to make.** The brief said "different types of blocks … etc." and asked for
+power-ups without naming either set, so the seven block behaviours in §6, the nine power-ups in
+§6.1, the palette in §3 and the level archetypes in §7 are our choice. They are the parts of the
+spec that were left open; everything else follows the brief literally. All four sets are data,
+so they are cheap to disagree with.
 
 ---
 
@@ -41,12 +45,13 @@ index.html  ──▶  src/main.ts
                    ├── core/Input         keyboard + pointer, normalized to canvas space
                    ├── core/Viewport      DPR-aware sizing, letterboxed 16:9 play field
                    ├── core/Rng           seeded sfc32, deterministic per level
+                   ├── config/            all tunable numbers + block and power-up registries
                    │
                    ├── app/Game           top-level state machine
                    │     states: Boot → Title → Playing → LevelClear → GameOver
                    │
                    ├── game/World         entities + rules for one level
-                   │     Ball, Paddle, Brick[], Field bounds
+                   │     Ball[], Paddle, Brick[], Drops, Effects, Field bounds
                    │
                    ├── physics/            swept circle-vs-AABB, speed/angle constraints
                    ├── level/              procedural generation + validation
@@ -65,6 +70,29 @@ motion stays smooth on displays that are not an exact multiple of the sim rate.
 - An accumulator drains at most 5 steps per frame; beyond that we drop time (no spiral of death).
 - Rendering happens once per `requestAnimationFrame` with positional interpolation.
 - The loop stops on `visibilitychange` and on window blur, and resumes without a time spike.
+
+### 2.1 Configuration
+
+Everything a balance pass would want to change is data, in `src/config/`:
+
+| File | Holds |
+|---|---|
+| `feel.ts` | Every number that decides how the game feels — ball speed curve, rally ramp, paddle width curve and stiffness, wall proportions, difficulty curve, drop rates, pacing |
+| `blocks.ts` | The block registry: `BrickKind` ids and one `BLOCK_TABLE` row per type |
+| `powerups.ts` | The power-up registry: one `POWERUP_TABLE` row per capsule |
+
+No gameplay file hard-codes a tunable value; they all read from these. That is what makes the
+two content registries genuinely extensible rather than nominally so:
+
+- **Adding a block type** is an id in `BrickKind`, a row in `BLOCK_TABLE`, and a `case` in
+  `render/painters/bricks.ts` for how it looks. Generation budgets, collision response,
+  scoring, the win condition and fracture behaviour all read the table, so nothing else needs
+  to know the type exists.
+- **Adding a power-up** is one row in `POWERUP_TABLE`. Timed effects are declared as
+  *modifiers* (`paddleScale`, `ballSpeedScale`, `ballRadiusScale`, `catchBall`, `pierce`) which
+  `game/Effects.ts` multiplies together, so a new modifier-based capsule needs no simulation
+  change at all. Only a genuinely new *kind* of effect needs code, via the `action` field.
+- Setting a `weight` of 0 keeps an entry defined but stops it dropping.
 
 ### Shutdown
 
@@ -190,13 +218,24 @@ Per sim step, up to **4** iterations:
 
 Anti-degeneracy guards, all in `physics/constraints.ts`:
 
-- **speed clamp** to `[minSpeed, maxSpeed]` after every reflection;
+- **speed clamp** to `[minSpeed, maxSpeed]` after every reflection, where the band is the
+  level's target speed scaled by the active power-up modifiers;
+- **rally cool-down**: speed above the level's target is shed at `rallyRelax` per second, so
+  surviving a long exchange relaxes the ball instead of leaving it permanently too fast;
 - **min vertical component**: if `|v.y| < 0.22·|v|`, rotate the vector away from horizontal, so
   the ball can never grind along the ceiling forever;
 - **stuck detector**: if 4 iterations are exhausted in one step, nudge the ball along the last
   normal by `2ε` and zero the tangential component.
 
-### 4.4 Paddle
+### 4.4 Multiple balls
+
+The disrupt capsule splits the ball, so balls are a list, not a single entity. The list is the
+live prefix of a pool of `MAX_BALLS` reused `Ball` objects — a lost ball is swapped out of the
+prefix rather than freed, so a chain of pickups never allocates mid-rally. Each ball is swept
+and resolved independently; a life is spent only when the list empties, and a banked guard
+charge is consumed before that happens.
+
+### 4.5 Paddle
 
 The paddle is an AABB with rounded visual caps and a real horizontal velocity (it is
 position-driven by pointer/keys through a critically-damped spring, so it has inertia and can
@@ -207,7 +246,9 @@ impart it). On contact:
   makes the game controllable;
 - the paddle's own velocity adds tangential speed (`v.x += 0.35·paddleVx`) and **spin**
   (`spin += 0.02·paddleVx`), which then curves the ball via §4.1;
-- speed increases by 1.5% per paddle hit, capped, so rallies get tenser.
+- speed increases by `rallyRamp` (0.8%) per paddle hit, capped. This was 1.5%, which compounded
+  to +56% over a thirty-hit rally and made long exchanges unreadable; at 0.8% the same rally is
+  +27%, which is tense but still playable.
 
 ---
 
@@ -244,10 +285,20 @@ Each level picks an archetype weighted by `levelIndex`:
 
 ### Difficulty curve
 
-`level 1 → ∞`: ball speed `380 + 14·√level` px/s (capped 780), paddle width `120 − 3·level`
-(floor 72), brick rows `4 + ⌊level/3⌋` (cap 9), and the exotic-kind budget grows from 0 to ~35%
-of the layout. Every 5th level is a **set piece**: a fixed archetype with a higher steel count
-and a wider paddle, to break the rhythm.
+All of it derives from `config/feel.ts`. Both pressure curves use `√(level−1)` rather than a
+linear ramp: ball speed is `400 + 26·√(level−1)` px/s (capped 760) and paddle width is
+`126 − 8·√(level−1)` (floor 84). The linear versions this started with bottomed the paddle out
+by level 16 and outran the player well before that; under the square root the pressure keeps
+climbing but never runs away, and most of the added difficulty comes from brick count and
+exotic kinds instead.
+
+Brick rows run `7 + ⌊level/2⌋` capped at 12, the exotic-kind budget grows from 0 to ~35% of the
+layout, and the drop chance climbs from 12% to 20%. Every 5th level is a **set piece**: a
+higher steel count, a wider paddle, and a different rhythm.
+
+Cell height is *derived*, not fixed: a full-height 12-row wall fills `bandHeight` (64%) of the
+field, so a shorter level fills proportionally less. With a fixed cell height every level read
+as a thin strip above a mostly empty playfield.
 
 ---
 
@@ -263,8 +314,38 @@ and a wider paddle, to break the rhythm.
 | **Regenerating** | 1 | rebuilds after 8 s unless the level is already clear; max 3 rebuilds | 120 each | wireframe ghost while rebuilding, scanline wipe on return |
 | **Mirror** | 2 | 45° angled face: reflects along its diagonal, not the axis | 200 | angled chrome wedge, high-contrast diagonal dither |
 
-Win condition ignores Steel and counts a Regenerating brick as cleared once it is out of
-rebuilds. Lose condition is lives reaching zero.
+Win condition ignores Steel. A Regenerating brick counts as still blocking while a rebuild is
+pending, including the last one — treating it as cleared the moment its counter hit zero ended
+the level while the brick was still on its way back. Lose condition is lives reaching zero.
+
+Each row is one entry in `BLOCK_TABLE`; the table also carries a `dropBias` (how likely that
+kind is to drop a capsule — Steel is 0) and a `generatorWeight` for the exotic budget.
+
+### 6.1 Power-ups
+
+Destroying a brick can drop a capsule, which falls with a slight sway and is collected by
+touching it with the paddle. Catching one is worth 75 points, outside the brick combo.
+
+| Glyph | Effect | Duration | Kind |
+|---|---|---|---|
+| **E** | paddle ×1.45 | 18 s | modifier |
+| **N** | paddle ×0.68 | 13 s | modifier, hazard |
+| **S** | ball speed ×0.76 | 12 s | modifier |
+| **F** | ball speed ×1.28 | 10 s | modifier, hazard |
+| **C** | ball sticks to the paddle on contact | 16 s | modifier |
+| **B** | ball destroys bricks without reflecting (not Steel), radius ×1.2 | 8 s | modifier |
+| **D** | splits into 2 extra balls | instant | action |
+| **P** | extra life | instant | action |
+| **G** | one banked save at the floor line | until used | action |
+
+Two rules keep the set legible. Re-collecting a running effect **refreshes** it rather than
+stacking, so a lucky streak cannot make one effectively permanent. Collecting the opposite of a
+running effect **cancels** it rather than multiplying against it — expand and narrow would
+otherwise silently cancel out, leaving the player unable to tell which was running. Timed
+effects end with the level; banked guard charges carry over.
+
+Hazards pulse fast while falling and are marked in the HUD, so dodging one is a decision rather
+than a surprise.
 
 ---
 
@@ -319,8 +400,47 @@ Widgets provided: **Button** (bevelled plate, dithered face, hover sheen, real p
 (sliding chrome block in a notched channel), and **Panel** (framed, dithered, corner brackets
 and a title tab).
 
-Screens: Title, Options, Pause, LevelClear (score breakdown, counting up), GameOver.
-HUD: score (odometer roll), lives (paddle glyphs), level, combo meter, and floating score pops.
+Screens: Title, Options, Pause, LevelClear (score breakdown, counting up), GameOver, plus the
+level-intro card (§9.2).
+
+The HUD occupies the 76 px band above the field and has to fit six things without any of them
+touching, so its layout is explicit rather than incremental — three rows at fixed baselines,
+each owning its horizontal thirds:
+
+```
+row 1   score            level          lives
+row 2   digits           digits         pips
+row 3   bricks / balls   combo meter    active power-up chips
+```
+
+Power-up chips drain with their timers and flash once under 25% left, because knowing an
+effect is about to end matters as much as knowing it is running. A banked guard also draws a
+shield line along the floor, where it is about to matter.
+
+### 9.1 Touch
+
+Pointer input already drives the paddle, so touch needed three things rather than a separate
+control scheme: dragging is tracked on the window rather than the canvas (a touch that starts
+outside the element still has to steer), every widget gets a 14 px hit margin (a control sized
+for a cursor is not reliably hittable with a fingertip, and growing the drawn shape would
+change the layout), and an on-screen pause control appears — there is no `Esc` key to reach
+for. That control lives outside the per-screen widget tree so it survives state changes, and
+it swallows the press that would otherwise launch the ball.
+
+Touch mode is sticky once a touch or pen is seen, and seeded from `(pointer: coarse)`. A
+layout that flickered between touch and cursor sizing as the player switched hands would be
+worse than picking one and staying there.
+
+The field is a fixed 16:9, which a portrait phone would letterbox into an unplayable strip, so
+portrait gets a rotate prompt instead.
+
+### 9.2 The level-intro card
+
+A procedurally generated wall gives the player no chance to recognise it, so every level opens
+with a card naming the archetype — the difference between "another random wall" and "this is a
+sentinel, the core is shielded". It holds the ball for 2.3 s, slides in from the left and out to
+the right, and is drawn as a dithered plate over the live field rather than over a blackout, low
+in the rally space so it does not cover the layout it is describing.
 
 ---
 
@@ -330,6 +450,7 @@ HUD: score (odometer roll), lives (paddle glyphs), level, combo meter, and float
 brickScore   = base(kind) × comboMultiplier × levelMultiplier
 comboMult    = 1 + 0.1 × min(combo, 30)        combo = bricks broken since last paddle touch
 levelMult    = 1 + 0.05 × (level − 1)
+capsule      = 75 × levelMultiplier            outside the combo — bricks own that
 levelClear   = 1000 × level
                + timeBonus  = max(0, 60 − seconds) × 25
                + flawless   = 2500 if no life lost this level
@@ -373,11 +494,18 @@ Vitest, `run` mode only (never watch, so nothing lingers).
 - `level/generate.test.ts` — determinism for a fixed seed, the solvability invariant over 200
   seeds, HP inside the difficulty band, a steel cap, and no fully-enclosed destructibles.
 - `render/dither.test.ts` — Bayer matrix is a permutation of 0…63 and tiles at 0.5 mean.
-- `game/Score.test.ts` — combo, level and bonus arithmetic.
+- `game/Score.test.ts` — combo, level, capsule and bonus arithmetic.
+- `game/Effects.test.ts` — modifiers multiply, refresh-not-stack, opposites cancel, one-shots
+  bank, timed effects clear between levels while guards carry over.
+- `level/tuning.test.ts` — the difficulty curve is monotonic and bounded on every axis, and
+  the paddle does not reach its floor early (the regression the old linear curve had).
 - `game/World.test.ts` — the integration layer, with no canvas: starting a run, loading a
   generated level, ball containment over a 20 s rally, per-kind brick behaviour for all seven
-  types, life loss, game over, level clear and awarded score. This is the suite that catches
-  wiring mistakes, which rendering correctly tells you nothing about.
+  types, life loss, game over, level clear and awarded score — plus the power-up path end to
+  end: capsule collection and expiry, multiball and the ball cap, catch, breaker against a
+  brick and against steel, guard consuming a charge before a life, and effects clearing on
+  death. This is the suite that catches wiring mistakes, which rendering correctly tells you
+  nothing about.
 
 Canvas output is not unit tested. It is verified by driving the built bundle in a real browser
 and reading the canvas back — see the Status section of ROADMAP.md for what that covered.
@@ -397,10 +525,11 @@ arka/
 │   ├── main.ts
 │   ├── styles.css
 │   ├── app/        Game state machine, screens wiring
+│   ├── config/     feel, blocks, powerups  ← every tunable number and both registries
 │   ├── core/       Loop, Input, Viewport, Rng, Profiler, Audio (no-op seam)
 │   ├── math/       vec2, aabb, scalar, easing
 │   ├── physics/    swept, constraints
-│   ├── game/       Ball, Paddle, Brick, BrickGrid, World, kinds, field, Score
+│   ├── game/       Ball, Paddle, Brick, BrickGrid, World, Drops, Effects, kinds, field, Score
 │   ├── level/      generate, archetypes, kinds, validate, tuning
 │   ├── fx/         Fracture, Particles, Shake
 │   ├── render/     palette, dither, glyphs, text, shapes, painters/, Background, Post

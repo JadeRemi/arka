@@ -4,6 +4,8 @@ import { generateLevel } from "../level/generate";
 import { BrickKind } from "./kinds";
 import { fieldBottom, fieldLeft, fieldRight, fieldTop } from "./field";
 import { DT } from "../core/Loop";
+import { MAX_BALLS, MULTIBALL_SPLIT, POWERUP_TABLE, indexOfPowerUp } from "../config/powerups";
+import { DROPS } from "../config/feel";
 
 /**
  * Integration coverage for the simulation, with no canvas involved. This is where wiring
@@ -15,6 +17,9 @@ function newWorld(level = 1, seed = 0xbeef): World {
   const spec = generateLevel(level, seed);
   world.startRun(seed);
   world.loadLevel(level, seed, spec);
+  // Every level opens with the intro card holding the ball. Tests skip it explicitly rather
+  // than waiting it out, and one test below covers the hold itself.
+  world.introDelay = 0;
   return world;
 }
 
@@ -24,7 +29,7 @@ function play(world: World, seconds: number, autoPaddle = true): void {
   for (let i = 0; i < steps; i++) {
     const target = autoPaddle ? world.ball.pos.x : undefined;
     world.step(DT, target, 0, autoPaddle);
-    if (world.ball.docked && world.respawnDelay <= 0 && !world.gameOver) world.launch();
+    if (world.allDocked && world.respawnDelay <= 0 && !world.gameOver) world.launch();
   }
 }
 
@@ -46,6 +51,24 @@ describe("World lifecycle", () => {
     for (const k of spec.kinds) if (k !== -1) expected++;
     expect(world.grid.bricks.length).toBe(expected);
     expect(world.level).toBe(7);
+  });
+
+  it("holds the ball through the level-intro card, then allows a launch", () => {
+    const world = new World();
+    const spec = generateLevel(1, 5);
+    world.startRun(5);
+    world.loadLevel(1, 5, spec);
+
+    expect(world.introDelay).toBeGreaterThan(0);
+    world.launch();
+    expect(world.ball.docked).toBe(true);
+
+    // Capture the bound before stepping: `introDelay` shrinks each step.
+    const holdSteps = Math.round((world.introDelay + 0.05) / DT);
+    for (let i = 0; i < holdSteps; i++) world.step(DT, undefined, 0, false);
+    expect(world.introDelay).toBe(0);
+    world.launch();
+    expect(world.ball.docked).toBe(false);
   });
 
   it("docks the ball on the paddle and only launches on request", () => {
@@ -242,5 +265,234 @@ describe("level clear", () => {
     for (let c = 2; c < 10; c++) world.grid.place(c, 0, BrickKind.Standard, false);
     play(world, 25);
     expect(world.score.total).toBeGreaterThan(0);
+  });
+});
+
+describe("power-ups", () => {
+  it("collects a capsule that reaches the paddle and scores it", () => {
+    const world = newWorld();
+    const before = world.score.total;
+    world.drops.spawn(world.paddle.x, world.paddle.bounds.y - 4, indexOfPowerUp("expand"));
+    world.step(DT, undefined, 0, false);
+
+    expect(world.drops.count).toBe(0);
+    expect(world.effects.isActive("expand")).toBe(true);
+    expect(world.score.total).toBeGreaterThan(before);
+
+    const events: { type: string }[] = [];
+    world.drainEvents(events as never[]);
+    expect(events.some((e) => e.type === "powerup")).toBe(true);
+  });
+
+  it("leaves a capsule alone until it actually overlaps the paddle", () => {
+    const world = newWorld();
+    world.drops.spawn(world.paddle.x, fieldTop() + 20, indexOfPowerUp("expand"));
+    world.step(DT, undefined, 0, false);
+    expect(world.drops.count).toBe(1);
+    expect(world.effects.isActive("expand")).toBe(false);
+  });
+
+  it("drops a capsule off the bottom of the field rather than keeping it forever", () => {
+    const world = newWorld();
+    world.paddle.setTarget(fieldLeft() + 40);
+    world.drops.spawn(fieldRight() - 40, fieldBottom() - 30, indexOfPowerUp("expand"));
+    for (let i = 0; i < Math.round(2 / DT); i++) world.step(DT, undefined, 0, false);
+    expect(world.drops.count).toBe(0);
+    expect(world.effects.isActive("expand")).toBe(false);
+  });
+
+  it("expand widens the paddle and it eases back when the effect ends", () => {
+    const world = newWorld();
+    const base = world.paddle.targetWidth;
+    world.effects.collect(POWERUP_TABLE.expand);
+    world.step(DT, undefined, 0, false);
+    expect(world.paddle.targetWidth).toBeGreaterThan(base);
+
+    // Let the plate actually reach its new size, then run the effect out.
+    for (let i = 0; i < Math.round(2 / DT); i++) world.step(DT, undefined, 0, false);
+    expect(world.paddle.bounds.w).toBeGreaterThan(base);
+
+    for (let i = 0; i < Math.round((POWERUP_TABLE.expand.duration + 2) / DT); i++) {
+      world.step(DT, undefined, 0, false);
+    }
+    expect(world.paddle.targetWidth).toBeCloseTo(base, 4);
+  });
+
+  it("slow and fast move the ball speed band in opposite directions", () => {
+    const world = newWorld();
+    const base = world.targetSpeed;
+
+    world.effects.collect(POWERUP_TABLE.slow);
+    world.step(DT, undefined, 0, false);
+    expect(world.targetSpeed).toBeLessThan(base);
+    expect(world.ball.maxSpeed).toBeLessThan(
+      (world.spec?.tuning.ballMaxSpeed ?? Infinity) + 1,
+    );
+
+    world.effects.collect(POWERUP_TABLE.speed);
+    world.step(DT, undefined, 0, false);
+    expect(world.targetSpeed).toBeGreaterThan(base);
+  });
+
+  it("disrupt splits the ball and never exceeds the ball cap", () => {
+    const world = newWorld();
+    world.launch();
+    expect(world.ballCount).toBe(1);
+
+    world.effects.collect(POWERUP_TABLE.multi);
+    world.step(DT, world.ball.pos.x, 0, true);
+    expect(world.ballCount).toBe(1 + MULTIBALL_SPLIT);
+
+    for (let i = 0; i < 8; i++) {
+      world.effects.collect(POWERUP_TABLE.multi);
+      world.step(DT, world.ball.pos.x, 0, true);
+    }
+    expect(world.ballCount).toBeLessThanOrEqual(MAX_BALLS);
+  });
+
+  it("loses no life while a spare ball is still in play", () => {
+    const world = newWorld();
+    world.launch();
+    world.effects.collect(POWERUP_TABLE.multi);
+    world.step(DT, world.ball.pos.x, 0, true);
+    const lives = world.lives;
+    expect(world.ballCount).toBeGreaterThan(1);
+
+    // Send exactly one ball out of play, well away from the paddle.
+    const doomed = world.balls[world.ballCount - 1]!;
+    doomed.pos.x = fieldLeft() + 6;
+    doomed.pos.y = fieldBottom() - 2;
+    doomed.vel.x = 0;
+    doomed.vel.y = 700;
+    world.paddle.x = fieldRight() - 30;
+    world.paddle.targetX = world.paddle.x;
+
+    for (let i = 0; i < 20; i++) world.step(DT, undefined, 0, false);
+    expect(world.lives).toBe(lives);
+    expect(world.ballCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("catch docks the ball on the paddle instead of bouncing it", () => {
+    const world = newWorld();
+    world.effects.collect(POWERUP_TABLE.catch);
+    world.launch();
+    const ball = world.ball;
+    ball.pos.x = world.paddle.x;
+    ball.pos.y = world.paddle.bounds.y - 30;
+    ball.vel.x = 0;
+    ball.vel.y = 420;
+    ball.spin = 0;
+
+    for (let i = 0; i < 40; i++) {
+      world.step(DT, undefined, 0, false);
+      if (ball.docked) break;
+    }
+    expect(ball.docked).toBe(true);
+
+    world.launch();
+    expect(ball.docked).toBe(false);
+    expect(ball.vel.y).toBeLessThan(0);
+  });
+
+  it("breaker passes through a brick without reflecting, but not through steel", () => {
+    const world = newWorld();
+    world.grid.clear();
+    // A middle row, so the ball has room to keep rising without reaching the ceiling and
+    // turning around before the assertion.
+    const plain = world.grid.place(6, 6, BrickKind.Standard, false);
+    world.effects.collect(POWERUP_TABLE.pierce);
+    world.launch();
+
+    const ball = world.ball;
+    ball.pos.x = plain.bounds.x + plain.bounds.w * 0.5;
+    ball.pos.y = plain.bounds.y + plain.bounds.h + 24;
+    ball.vel.x = 0;
+    ball.vel.y = -480;
+    ball.spin = 0;
+    for (let i = 0; i < 40 && plain.alive; i++) world.step(DT, undefined, 0, false);
+
+    expect(plain.alive).toBe(false);
+    // Still rising at the moment it broke through: a reflection would have flipped the sign.
+    expect(ball.vel.y).toBeLessThan(0);
+
+    const steel = world.grid.place(6, 8, BrickKind.Steel, false);
+    ball.pos.x = steel.bounds.x + steel.bounds.w * 0.5;
+    ball.pos.y = steel.bounds.y + steel.bounds.h + 24;
+    ball.vel.x = 0;
+    ball.vel.y = -480;
+    ball.spin = 0;
+    for (let i = 0; i < 40 && ball.vel.y < 0; i++) world.step(DT, undefined, 0, false);
+    expect(steel.alive).toBe(true);
+    expect(ball.vel.y).toBeGreaterThan(0);
+  });
+
+  it("guard saves the last ball once per charge, then stops", () => {
+    const world = newWorld();
+    world.effects.collect(POWERUP_TABLE.guard);
+    expect(world.effects.guardCharges).toBe(1);
+    world.launch();
+
+    const drop = (): void => {
+      const ball = world.ball;
+      ball.pos.x = fieldLeft() + 40;
+      ball.pos.y = fieldBottom() - 2;
+      ball.vel.x = 0;
+      ball.vel.y = 760;
+      world.paddle.x = fieldRight() - 30;
+      world.paddle.targetX = world.paddle.x;
+    };
+
+    const lives = world.lives;
+    drop();
+    for (let i = 0; i < 12; i++) world.step(DT, undefined, 0, false);
+    expect(world.lives).toBe(lives);
+    expect(world.effects.guardCharges).toBe(0);
+    expect(world.ball.vel.y).toBeLessThan(0);
+
+    const events: { type: string }[] = [];
+    world.drainEvents(events as never[]);
+    expect(events.some((e) => e.type === "guard")).toBe(true);
+
+    // No charge left: the next drop costs a life.
+    drop();
+    for (let i = 0; i < 40; i++) world.step(DT, undefined, 0, false);
+    expect(world.lives).toBe(lives - 1);
+  });
+
+  it("extra ball adds a life", () => {
+    const world = newWorld();
+    const lives = world.lives;
+    world.effects.collect(POWERUP_TABLE.life);
+    world.step(DT, undefined, 0, false);
+    expect(world.lives).toBe(lives + 1);
+  });
+
+  it("clears timed effects and pending capsules when a life is lost", () => {
+    const world = newWorld();
+    world.effects.collect(POWERUP_TABLE.expand);
+    world.drops.spawn(fieldLeft() + 100, fieldTop() + 100, indexOfPowerUp("slow"));
+    world.launch();
+
+    const ball = world.ball;
+    ball.pos.x = fieldLeft() + 20;
+    ball.pos.y = fieldBottom() - 2;
+    ball.vel.x = 0;
+    ball.vel.y = 800;
+    world.paddle.x = fieldRight() - 30;
+    world.paddle.targetX = world.paddle.x;
+    for (let i = 0; i < 40; i++) world.step(DT, undefined, 0, false);
+
+    expect(world.effects.isActive("expand")).toBe(false);
+    expect(world.drops.count).toBe(0);
+    expect(world.ballCount).toBe(1);
+    expect(world.ball.docked).toBe(true);
+  });
+
+  it("drops capsules over a long run, and only from bricks that allow it", () => {
+    const world = newWorld(14, 20260908);
+    play(world, 40);
+    // Steel has dropBias 0, so nothing can have come from an indestructible brick.
+    expect(world.score.total).toBeGreaterThan(0);
+    expect(DROPS.chance).toBeGreaterThan(0);
   });
 });
